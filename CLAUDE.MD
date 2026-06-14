@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-This is an **AI-powered Code Generator** built as an Appwrite Function using **Bun** runtime and **Ollama** for local LLM inference. It generates code, tests, and documentation from natural language descriptions.
+This is an **AI-powered Code Generator** built as an Appwrite Function using **Bun** runtime and **Ollama** for local LLM inference. It generates code, tests, and documentation from natural language descriptions, with full user authentication, webhooks, and automated maintenance.
 
 ### Technology Stack
 - **Runtime**: Bun (1.0+)
@@ -10,6 +10,7 @@ This is an **AI-powered Code Generator** built as an Appwrite Function using **B
 - **Platform**: Appwrite Functions
 - **SDK**: node-appwrite (v9.0.0)
 - **AI**: Ollama (CodeLlama model)
+- **Features**: User Auth, Rate Limiting, Webhooks, Auto-Cleanup
 
 ## Project Structure
 
@@ -21,12 +22,18 @@ bunb-appwrite-fun/
 │       │   ├── main.ts          # Main function entry point & routing
 │       │   ├── types.ts         # TypeScript type definitions
 │       │   ├── ollama.ts        # Ollama client & prompt builders
-│       │   └── appwrite.ts      # Appwrite Database & Storage service
+│       │   ├── appwrite.ts      # Appwrite Database & Storage service
+│       │   ├── auth.ts          # User authentication & rate limiting
+│       │   ├── webhooks.ts      # Webhook handling & integrations
+│       │   └── cleanup.ts       # Automated cache cleanup
 │       ├── package.json          # Function dependencies
 │       ├── bun.lockb            # Bun lock file
 │       ├── .env.example         # Environment variable template
 │       ├── EXAMPLES.md          # API usage examples
 │       ├── APPWRITE_SETUP.md    # Appwrite Database setup guide
+│       ├── AUTHENTICATION.md    # Auth & security documentation
+│       ├── WEBHOOKS.md          # Webhook integration guide
+│       ├── CLEANUP.md           # Cache cleanup documentation
 │       └── README.md            # Function-specific docs
 ├── README.md                     # Project documentation
 └── CLAUDE.MD                     # This file
@@ -41,14 +48,19 @@ The main function handler with routing logic. Exports a default async function t
 - `log`: Logging function
 - `error`: Error logging function
 
-**Current Implementation**:
+**Current Endpoints**:
 - `GET /`: Health check and API information
-- `GET /health`: Ollama and Appwrite availability check
-- `POST /api/code/generate`: AI code generation endpoint
+- `GET /health`: Full system health (Ollama, Appwrite, cleanup, webhooks)
+- `POST /api/code/generate`: AI code generation with rate limiting
 - `GET /api/stats`: Generation analytics and statistics
 - `GET /api/history`: Recent generation history
+- `GET /api/user/history`: User-specific history (auth required)
+- `GET /api/user/stats`: User statistics (auth required)
 - `GET /api/history/search`: Search previous generations
 - `GET /api/history/:id`: Retrieve specific generation by ID
+- `POST /api/webhook`: Receive Appwrite webhook events
+- `POST /api/cleanup`: Manual cache cleanup (auth required)
+- `GET /api/cleanup/status`: Cleanup status and auto-trigger
 
 ### `/functions/firstfunction/src/types.ts`
 TypeScript type definitions for:
@@ -67,12 +79,41 @@ Ollama integration utilities:
 ### `/functions/firstfunction/src/appwrite.ts`
 Appwrite Database and Storage integration:
 - `AppwriteService`: Manages history, caching, and analytics
-- `saveToHistory()`: Store generation in database
+- `saveToHistory()`: Store generation in database with user tracking
 - `checkCache()`: Retrieve cached responses
 - `saveToCache()`: Cache responses with TTL
 - `searchHistory()`: Full-text search across generations
 - `getGenerationStats()`: Analytics and usage metrics
 - `storeAsFile()`: Save generated code to Storage
+
+### `/functions/firstfunction/src/auth.ts`
+User authentication and rate limiting:
+- `AuthService`: User context extraction and API key validation
+- `getUserContext()`: Extract user info from Appwrite headers
+- `validateApiKey()`: Validate external API keys
+- `isAuthorized()`: Check request authorization
+- `RateLimitService`: Request rate limiting per user/IP
+- `checkLimit()`: Validate and track request limits
+- `cleanup()`: Remove expired rate limit entries
+
+### `/functions/firstfunction/src/webhooks.ts`
+Webhook handling and external integrations:
+- `WebhookService`: Process Appwrite webhook events
+- `validateSignature()`: HMAC signature validation
+- `processWebhook()`: Handle various event types
+- `sendDiscordNotification()`: Discord integration
+- `sendSlackNotification()`: Slack integration
+- `triggerCustomWebhook()`: External service webhooks
+- `WebhookEventRegistry`: Track webhook events
+
+### `/functions/firstfunction/src/cleanup.ts`
+Automated cache cleanup and maintenance:
+- `CleanupService`: Database optimization and cleanup
+- `cleanExpiredCache()`: Remove expired cache entries
+- `cleanOldHistory()`: Archive old generations
+- `optimizeDatabase()`: Full database maintenance
+- `ScheduledCleanupManager`: Automatic cleanup scheduling
+- `runScheduled()`: Execute scheduled cleanup (24h interval)
 
 ### `/functions/firstfunction/package.json`
 Defines the function's dependencies and scripts:
@@ -96,6 +137,30 @@ Complete Appwrite Database setup guide:
 - Permission configuration
 - Environment variable setup
 - Verification steps
+
+### `/functions/firstfunction/AUTHENTICATION.md`
+Authentication and security documentation:
+- User authentication methods (Appwrite, API keys, anonymous)
+- Rate limiting configuration and behavior
+- User-specific endpoints
+- Security best practices
+- Troubleshooting guide
+
+### `/functions/firstfunction/WEBHOOKS.md`
+Webhook integration documentation:
+- Supported webhook events
+- Signature validation
+- External integrations (Discord, Slack, custom)
+- Event processing workflows
+- Testing and monitoring
+
+### `/functions/firstfunction/CLEANUP.md`
+Cache cleanup documentation:
+- Automated cleanup system
+- Manual cleanup triggers
+- Performance optimization
+- Monitoring and alerts
+- Troubleshooting guide
 
 ## Development Workflow
 

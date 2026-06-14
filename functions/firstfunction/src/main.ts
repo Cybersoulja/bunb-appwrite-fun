@@ -13,6 +13,16 @@ import {
   buildDocPrompt,
 } from "./ollama";
 import { AppwriteService } from "./appwrite";
+import { AuthService, RateLimitService } from "./auth";
+import { WebhookService, WebhookEventRegistry } from "./webhooks";
+import { CleanupService, ScheduledCleanupManager } from "./cleanup";
+
+// Global instances
+const rateLimiter = new RateLimitService(
+  parseInt(Bun.env.RATE_LIMIT_PER_MINUTE || "20")
+);
+const webhookRegistry = new WebhookEventRegistry();
+const cleanupManager = new ScheduledCleanupManager();
 
 // Supported programming languages
 const SUPPORTED_LANGUAGES: SupportedLanguage[] = [
@@ -79,7 +89,8 @@ function validateRequest(body: any): {
 async function handleCodeGeneration(
   request: CodeGenerationRequest,
   log: (message: any) => void,
-  useCache: boolean = true
+  useCache: boolean = true,
+  userId?: string
 ): Promise<CodeGenerationResponse & { cached?: boolean; historyId?: string }> {
   const ollama = new OllamaClient();
   const appwrite = new AppwriteService();
@@ -168,6 +179,7 @@ async function handleCodeGeneration(
       {
         model: response.model,
         framework: request.framework,
+        userId: userId || null,
       }
     );
 
@@ -202,14 +214,20 @@ export default async ({ req, res, log, error }: AppwriteContext) => {
       return res.json({
         status: "ok",
         service: "AI Code Generator",
-        version: "2.0.0",
+        version: "3.0.0",
         appwriteEnabled: appwrite.isConfigured(),
+        features: ["code-generation", "caching", "history", "webhooks", "auth", "rate-limiting", "auto-cleanup"],
         endpoints: {
           generate: "POST /api/code/generate",
           history: "GET /api/history",
+          userHistory: "GET /api/user/history",
           search: "GET /api/history/search?q=query&language=python",
           stats: "GET /api/stats",
+          userStats: "GET /api/user/stats",
           getById: "GET /api/history/:id",
+          webhook: "POST /api/webhook",
+          cleanup: "POST /api/cleanup",
+          cleanupStatus: "GET /api/cleanup/status",
           health: "GET /health",
         },
       });
@@ -229,15 +247,40 @@ export default async ({ req, res, log, error }: AppwriteContext) => {
         appwrite: {
           configured: appwrite.isConfigured(),
           features: appwrite.isConfigured()
-            ? ["history", "caching", "search", "analytics"]
+            ? ["history", "caching", "search", "analytics", "webhooks", "auth"]
             : [],
         },
+        cleanup: cleanupManager.getStatus(),
+        webhooks: webhookRegistry.getStats(),
       });
     }
 
     // Code generation endpoint
     if (req.method === "POST" && req.path === "/api/code/generate") {
-      log("Received code generation request");
+      const auth = new AuthService();
+
+      // Get user context
+      const userContext = auth.getUserContext(req);
+      const authInfo = auth.getAuth(req);
+
+      // Rate limiting
+      const rateLimitKey = userContext.userId || authInfo.apiKey || req.headers["x-forwarded-for"] || "anonymous";
+      const rateLimit = rateLimiter.checkLimit(rateLimitKey);
+
+      if (!rateLimit.allowed) {
+        error(`Rate limit exceeded for: ${rateLimitKey}`);
+        return res.json(
+          {
+            error: "Too Many Requests",
+            message: `Rate limit exceeded. Try again in ${Math.ceil((rateLimit.resetAt - Date.now()) / 1000)} seconds.`,
+            statusCode: 429,
+            retryAfter: Math.ceil((rateLimit.resetAt - Date.now()) / 1000),
+          } as ErrorResponse,
+          429
+        );
+      }
+
+      log(`Received code generation request (user: ${userContext.userId || "anonymous"})`);
 
       // Parse and validate request
       const validation = validateRequest(req.body);
@@ -254,10 +297,21 @@ export default async ({ req, res, log, error }: AppwriteContext) => {
       }
 
       // Generate code
-      const result = await handleCodeGeneration(validation.data!, log);
+      const result = await handleCodeGeneration(
+        validation.data!,
+        log,
+        true,
+        userContext.userId || undefined
+      );
 
       log("Request completed successfully");
-      return res.json(result);
+
+      // Add rate limit headers
+      return res.json(result, 200, {
+        "X-RateLimit-Limit": rateLimiter["maxRequests"].toString(),
+        "X-RateLimit-Remaining": rateLimit.remaining.toString(),
+        "X-RateLimit-Reset": new Date(rateLimit.resetAt).toISOString(),
+      });
     }
 
     // Get generation statistics
@@ -400,6 +454,166 @@ export default async ({ req, res, log, error }: AppwriteContext) => {
       }
 
       return res.json(generation);
+    }
+
+    // Webhook endpoint
+    if (req.method === "POST" && req.path === "/api/webhook") {
+      const webhookService = new WebhookService();
+
+      log("Received webhook event");
+
+      // Validate webhook signature
+      const signature = req.headers["x-appwrite-signature"] || "";
+      const isValid = webhookService.validateSignature(req.bodyRaw || "", signature);
+
+      if (!isValid && Bun.env.WEBHOOK_SECRET) {
+        error("Invalid webhook signature");
+        return res.json(
+          {
+            error: "Unauthorized",
+            message: "Invalid webhook signature",
+            statusCode: 401,
+          } as ErrorResponse,
+          401
+        );
+      }
+
+      const { event, data } = req.body as { event: any; data: any };
+
+      // Process webhook
+      const result = await webhookService.processWebhook(event, data, log);
+
+      // Register event
+      webhookRegistry.register(event, result.success, result.success ? undefined : result.message);
+
+      return res.json({
+        success: result.success,
+        message: result.message,
+        actions: result.actions,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Cache cleanup endpoint
+    if (req.method === "POST" && req.path === "/api/cleanup") {
+      const cleanup = new CleanupService();
+      const auth = new AuthService();
+
+      // Require authentication for cleanup
+      if (!auth.isAuthorized(req, true)) {
+        error("Unauthorized cleanup attempt");
+        return res.json(
+          {
+            error: "Unauthorized",
+            message: "Authentication required for cleanup operations",
+            statusCode: 401,
+          } as ErrorResponse,
+          401
+        );
+      }
+
+      log("Starting manual cache cleanup");
+
+      const result = await cleanup.cleanExpiredCache(log);
+
+      return res.json({
+        success: result.success,
+        deletedCount: result.deletedCount,
+        duration: result.duration,
+        errors: result.errors,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // Cleanup status endpoint
+    if (req.method === "GET" && req.path === "/api/cleanup/status") {
+      const status = cleanupManager.getStatus();
+
+      // Run scheduled cleanup if needed
+      const scheduledResult = await cleanupManager.runScheduled(log);
+
+      return res.json({
+        status,
+        lastScheduledRun: scheduledResult.ran ? scheduledResult.results : null,
+      });
+    }
+
+    // User-specific history
+    if (req.method === "GET" && req.path === "/api/user/history") {
+      const auth = new AuthService();
+      const appwrite = new AppwriteService();
+
+      const userContext = auth.getUserContext(req);
+
+      if (!userContext.authenticated) {
+        return res.json(
+          {
+            error: "Unauthorized",
+            message: "User authentication required",
+            statusCode: 401,
+          } as ErrorResponse,
+          401
+        );
+      }
+
+      if (!appwrite.isConfigured()) {
+        return res.json(
+          {
+            error: "Service Unavailable",
+            message: "Appwrite is not configured",
+            statusCode: 503,
+          } as ErrorResponse,
+          503
+        );
+      }
+
+      log(`Fetching history for user: ${userContext.userId}`);
+
+      // This would require adding a method to AppwriteService
+      // For now, return a placeholder
+      return res.json({
+        userId: userContext.userId,
+        message: "User history endpoint - implementation pending",
+        // Would fetch: await appwrite.getUserHistory(userContext.userId!)
+      });
+    }
+
+    // User statistics
+    if (req.method === "GET" && req.path === "/api/user/stats") {
+      const auth = new AuthService();
+      const appwrite = new AppwriteService();
+
+      const userContext = auth.getUserContext(req);
+
+      if (!userContext.authenticated) {
+        return res.json(
+          {
+            error: "Unauthorized",
+            message: "User authentication required",
+            statusCode: 401,
+          } as ErrorResponse,
+          401
+        );
+      }
+
+      if (!appwrite.isConfigured()) {
+        return res.json(
+          {
+            error: "Service Unavailable",
+            message: "Appwrite is not configured",
+            statusCode: 503,
+          } as ErrorResponse,
+          503
+        );
+      }
+
+      log(`Fetching stats for user: ${userContext.userId}`);
+
+      return res.json({
+        userId: userContext.userId,
+        message: "User stats endpoint - implementation pending",
+        // Would fetch: await appwrite.getUserStats(userContext.userId!)
+      });
     }
 
     // Unknown endpoint
