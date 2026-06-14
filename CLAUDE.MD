@@ -20,11 +20,13 @@ bunb-appwrite-fun/
 │       ├── src/
 │       │   ├── main.ts          # Main function entry point & routing
 │       │   ├── types.ts         # TypeScript type definitions
-│       │   └── ollama.ts        # Ollama client & prompt builders
+│       │   ├── ollama.ts        # Ollama client & prompt builders
+│       │   └── appwrite.ts      # Appwrite Database & Storage service
 │       ├── package.json          # Function dependencies
 │       ├── bun.lockb            # Bun lock file
 │       ├── .env.example         # Environment variable template
 │       ├── EXAMPLES.md          # API usage examples
+│       ├── APPWRITE_SETUP.md    # Appwrite Database setup guide
 │       └── README.md            # Function-specific docs
 ├── README.md                     # Project documentation
 └── CLAUDE.MD                     # This file
@@ -41,8 +43,12 @@ The main function handler with routing logic. Exports a default async function t
 
 **Current Implementation**:
 - `GET /`: Health check and API information
-- `GET /health`: Ollama availability check
+- `GET /health`: Ollama and Appwrite availability check
 - `POST /api/code/generate`: AI code generation endpoint
+- `GET /api/stats`: Generation analytics and statistics
+- `GET /api/history`: Recent generation history
+- `GET /api/history/search`: Search previous generations
+- `GET /api/history/:id`: Retrieve specific generation by ID
 
 ### `/functions/firstfunction/src/types.ts`
 TypeScript type definitions for:
@@ -58,6 +64,16 @@ Ollama integration utilities:
 - `buildTestPrompt()`: Constructs prompts for test generation
 - `buildDocPrompt()`: Constructs prompts for documentation generation
 
+### `/functions/firstfunction/src/appwrite.ts`
+Appwrite Database and Storage integration:
+- `AppwriteService`: Manages history, caching, and analytics
+- `saveToHistory()`: Store generation in database
+- `checkCache()`: Retrieve cached responses
+- `saveToCache()`: Cache responses with TTL
+- `searchHistory()`: Full-text search across generations
+- `getGenerationStats()`: Analytics and usage metrics
+- `storeAsFile()`: Save generated code to Storage
+
 ### `/functions/firstfunction/package.json`
 Defines the function's dependencies and scripts:
 - **Dependencies**: `node-appwrite` for Appwrite SDK integration
@@ -66,10 +82,20 @@ Defines the function's dependencies and scripts:
 
 ### `/functions/firstfunction/EXAMPLES.md`
 Comprehensive API documentation with:
-- Request/response examples
+- Request/response examples for all endpoints
 - Language support details
+- Appwrite integration examples (history, search, stats)
+- Caching behavior documentation
 - Use cases and integration examples
 - Troubleshooting guide
+
+### `/functions/firstfunction/APPWRITE_SETUP.md`
+Complete Appwrite Database setup guide:
+- Database and collection creation
+- Schema definitions and indexes
+- Permission configuration
+- Environment variable setup
+- Verification steps
 
 ## Development Workflow
 
@@ -204,19 +230,62 @@ See `functions/firstfunction/EXAMPLES.md` for comprehensive examples.
 
 ## Appwrite Integration
 
+### Database Features (Optional)
+
+When Appwrite Database is configured, the function provides:
+
+**✅ Automatic History Tracking**
+- All code generations saved to `generation_history` collection
+- Includes code, tests, documentation, and metadata
+- Indexed by language and generation date
+- Full-text search on descriptions
+
+**✅ Smart Caching**
+- Identical requests return cached results instantly
+- 24-hour TTL for cached responses
+- Reduces Ollama load and improves response times
+- Cache key based on description + language + framework
+
+**✅ Analytics & Search**
+- Track total generations and language breakdown
+- Search history by keywords
+- Retrieve any previous generation by ID
+- Monitor usage patterns
+
 ### Environment Variables
-When deployed to Appwrite, the function has access to:
+
+**Automatically Set by Appwrite**:
 - `APPWRITE_FUNCTION_PROJECT_ID`: The Appwrite project ID
 - `APPWRITE_API_KEY`: API key for server-side operations
-- `OLLAMA_BASE_URL`: Custom Ollama endpoint (configure in Appwrite Console)
+- `APPWRITE_ENDPOINT`: Appwrite API endpoint
+
+**Required for Database Features**:
+- `APPWRITE_DATABASE_ID`: Database ID (default: `code_generator`)
+- `APPWRITE_HISTORY_COLLECTION_ID`: History collection ID (default: `generation_history`)
+- `APPWRITE_CACHE_COLLECTION_ID`: Cache collection ID (default: `response_cache`)
+- `APPWRITE_BUCKET_ID`: Storage bucket ID (default: `generated_code`)
+
+**Ollama Configuration**:
+- `OLLAMA_BASE_URL`: Custom Ollama endpoint (default: `http://localhost:11434`)
+
+### Setup Instructions
+
+See `functions/firstfunction/APPWRITE_SETUP.md` for detailed database setup:
+1. Create database and collections
+2. Configure indexes and permissions
+3. Set environment variables
+4. Test the integration
+
+**Note**: The function works without Appwrite Database configured, but history, caching, and search features will be disabled.
 
 ### Deployment Notes
 
 For production deployment:
-1. Ensure Ollama is accessible from your Appwrite instance
-2. Set `OLLAMA_BASE_URL` to your Ollama server URL
-3. Increase function timeout if generating large codebases (default: 15s)
-4. Consider using a dedicated Ollama instance for better performance
+1. **Ollama**: Ensure accessible from your Appwrite instance
+2. **Database**: Set up collections for history and caching (optional but recommended)
+3. **Timeout**: Increase function timeout for complex generations (default: 15s)
+4. **Performance**: Use a dedicated Ollama instance for better performance
+5. **Cache Cleanup**: Periodically clean expired cache entries
 
 ## Common Tasks
 

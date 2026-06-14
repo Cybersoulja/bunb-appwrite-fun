@@ -7,6 +7,7 @@ This document provides practical examples for using the AI Code Generator Appwri
 1. **Ollama must be running** on your local machine or accessible server
 2. Install the CodeLlama model: `ollama pull codellama`
 3. Set the `OLLAMA_BASE_URL` environment variable (optional, defaults to `http://localhost:11434`)
+4. **(Optional)** Set up Appwrite Database for history and caching (see `APPWRITE_SETUP.md`)
 
 ## API Endpoints
 
@@ -45,6 +46,10 @@ curl http://your-function-url/health
   "ollama": {
     "available": true,
     "baseUrl": "http://localhost:11434"
+  },
+  "appwrite": {
+    "configured": true,
+    "features": ["history", "caching", "search", "analytics"]
   }
 }
 ```
@@ -262,11 +267,169 @@ console.log(result.tests);
 console.log(result.documentation);
 ```
 
+## Appwrite Integration Endpoints
+
+> **Note**: These endpoints require Appwrite Database to be configured. See `APPWRITE_SETUP.md` for setup instructions.
+
+### 4. Get Generation Statistics
+
+**Endpoint**: `GET /api/stats`
+
+Get analytics about code generations (total count, language breakdown, recent generations).
+
+```bash
+curl http://your-function-url/api/stats
+```
+
+**Response**:
+```json
+{
+  "totalGenerations": 150,
+  "languageBreakdown": {
+    "typescript": 45,
+    "python": 38,
+    "javascript": 30,
+    "rust": 20,
+    "go": 17
+  },
+  "recentGenerations": [
+    {
+      "id": "64f5a1b2c3d4e5f6g7h8i9j0",
+      "description": "fibonacci function",
+      "language": "python",
+      "generatedAt": "2026-06-14T12:34:56.789Z"
+    }
+  ],
+  "message": "Statistics retrieved successfully"
+}
+```
+
+### 5. Search Generation History
+
+**Endpoint**: `GET /api/history/search`
+
+Search previous generations by description keywords.
+
+**Query Parameters**:
+- `q` (required): Search query
+- `language` (optional): Filter by language
+- `limit` (optional): Max results (default: 20)
+
+```bash
+# Search for all generations matching "fibonacci"
+curl "http://your-function-url/api/history/search?q=fibonacci"
+
+# Search for Python fibonacci functions
+curl "http://your-function-url/api/history/search?q=fibonacci&language=python&limit=10"
+```
+
+**Response**:
+```json
+{
+  "query": "fibonacci",
+  "language": "python",
+  "results": [
+    {
+      "$id": "64f5a1b2c3d4e5f6g7h8i9j0",
+      "description": "Create a function to calculate fibonacci numbers",
+      "language": "python",
+      "code": "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)",
+      "generatedAt": "2026-06-14T12:34:56.789Z"
+    }
+  ],
+  "count": 1
+}
+```
+
+### 6. Get Recent History
+
+**Endpoint**: `GET /api/history`
+
+Get the 10 most recent code generations.
+
+```bash
+curl http://your-function-url/api/history
+```
+
+**Response**:
+```json
+{
+  "recent": [
+    {
+      "id": "64f5a1b2c3d4e5f6g7h8i9j0",
+      "description": "fibonacci function",
+      "language": "python",
+      "generatedAt": "2026-06-14T12:34:56.789Z"
+    }
+  ],
+  "total": 150
+}
+```
+
+### 7. Get Generation by ID
+
+**Endpoint**: `GET /api/history/:id`
+
+Retrieve a specific code generation by its ID (returned in the `historyId` field).
+
+```bash
+curl http://your-function-url/api/history/64f5a1b2c3d4e5f6g7h8i9j0
+```
+
+**Response**:
+```json
+{
+  "$id": "64f5a1b2c3d4e5f6g7h8i9j0",
+  "description": "Create a function to calculate fibonacci numbers",
+  "language": "python",
+  "code": "def fibonacci(n):\n    if n <= 1:\n        return n\n    return fibonacci(n-1) + fibonacci(n-2)",
+  "tests": "def test_fibonacci():\n    assert fibonacci(0) == 0\n    assert fibonacci(1) == 1\n    assert fibonacci(10) == 55",
+  "documentation": "# Fibonacci Function\n\nCalculates the nth Fibonacci number using recursion.",
+  "model": "codellama",
+  "framework": null,
+  "generatedAt": "2026-06-14T12:34:56.789Z"
+}
+```
+
+## Caching Behavior
+
+When Appwrite is configured, the function automatically:
+
+1. **Checks cache** before generating new code
+2. **Returns cached results** for identical requests (description + language + framework)
+3. **Saves new generations** to cache with 24-hour TTL
+4. **Tracks all generations** in history for analytics
+
+**Response with cache hit**:
+```json
+{
+  "code": "...",
+  "language": "typescript",
+  "model": "codellama",
+  "cached": true
+}
+```
+
+**Response with cache miss** (fresh generation):
+```json
+{
+  "code": "...",
+  "language": "typescript",
+  "model": "codellama",
+  "cached": false,
+  "historyId": "64f5a1b2c3d4e5f6g7h8i9j0"
+}
+```
+
 ## Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OLLAMA_BASE_URL` | Base URL for Ollama API | `http://localhost:11434` |
+| `APPWRITE_DATABASE_ID` | Appwrite database ID | `code_generator` |
+| `APPWRITE_HISTORY_COLLECTION_ID` | History collection ID | `generation_history` |
+| `APPWRITE_CACHE_COLLECTION_ID` | Cache collection ID | `response_cache` |
+| `APPWRITE_BUCKET_ID` | Storage bucket ID | `generated_code` |
 
 ## Troubleshooting
 
@@ -284,3 +447,14 @@ console.log(result.documentation);
 - Check the list of supported languages
 - Language names are case-insensitive
 - Use standard language identifiers (e.g., "javascript" not "js")
+
+### "Appwrite is not configured"
+- Appwrite features (history, caching, search) are optional
+- Function works without Appwrite, but won't store history or cache responses
+- See `APPWRITE_SETUP.md` to enable these features
+
+### Cache not working
+- Ensure Appwrite Database is properly configured
+- Check that environment variables are set correctly
+- Cache has 24-hour TTL - older entries are not returned
+- Cache key is based on description + language + framework (exact match required)
